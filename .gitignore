@@ -1,0 +1,28 @@
+# Local datasets distributed through GitHub Releases
+/dataset.zip
+/*.csv
+
+# Generated data
+/data/raw/
+/data/processed/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
