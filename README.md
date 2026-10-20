@@ -1,6 +1,6 @@
 # Football Match Probability Prediction — Analyse exploratoire
 
-**Groupe :** Hugo, Antonio, Kalil, Gaby, Siloé
+**Groupe :** Hugo, Antonio,Gaby,kalil, Siloé
 
 **Dataset :** *Football Match Probability Prediction* sur Kaggle. Les données sont chargées depuis les fichiers CSV du dossier `data/` (une API peut être utilisée pour les récupérer ou les mettre à jour).
 
