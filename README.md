@@ -8,11 +8,11 @@
 
 - comprendre et vérifier les données de matchs de football ;
 - explorer les relations entre les variables ;
-- répondre à une question précise : **la forme récente d'une équipe influence-t-elle son prochain résultat, à niveau habituel et adversaires comparables ?**
+- répondre à une question précise : **peut-on prédire qui va gagner le prochain match en regardant les points accumulés lors des 5 derniers matchs ?**
 - à terme, construire un modèle de prévision des résultats de matchs et analyser les résultats à l'échelle des ligues ;
 - étudier des indicateurs d'équipes (meilleur buteur, séries sans défaite, corrélations et causalité possible).
 
-Le notebook actuel est une **analyse exploratoire (EDA)**. Il ne construit pas encore de modèle de production : les régressions de la partie 4 servent à comprendre les données, pas à prédire en conditions réelles.
+Le notebook actuel est une **analyse exploratoire (EDA)** suivie d'un premier test de prédiction (partie 4), volontairement simple : il ne construit pas encore de modèle de production.
 
 ---
 
@@ -52,7 +52,7 @@ data/
 └── train_target_and_scores.csv
 ```
 
-Bibliothèques utilisées : `pandas`, `numpy`, `matplotlib`, `seaborn`, `scipy` et `scikit-learn`.
+Bibliothèques utilisées : `pandas`, `numpy`, `matplotlib`, `seaborn` et `scikit-learn`.
 
 Le notebook se lit dans l'ordre : chaque partie commence par une question, montre les analyses, puis se termine par une réponse explicite.
 
@@ -206,164 +206,50 @@ Enfin, les formes récentes à domicile et à l'extérieur ne sont corrélées q
 
 ---
 
-## Partie 4 — La forme récente influence-t-elle le résultat suivant ?
+## Partie 4 — Peut-on prédire le gagnant du prochain match ?
 
-**Question :** *Dans quelle mesure les performances récentes d'une équipe influencent-elles son prochain résultat, indépendamment de son niveau habituel et de la force des adversaires rencontrés ?*
+**Question :** *Peut-on prédire qui va gagner le prochain match en regardant les points accumulés lors des 5 derniers matchs ?*
 
-C'est la partie la plus détaillée du notebook. Voici l'idée, étape par étape.
+L'idée est simple : une équipe qui gagne souvent ses derniers matchs devrait être « en forme », et donc gagner le match suivant. On teste cette idée avec des règles brutales, puis avec un petit modèle.
 
-### 4.1 Le piège à éviter
+### 4.1 La méthode : compter les points des derniers matchs
 
-Les équipes qui viennent de bien jouer sont souvent... de bonnes équipes. Elles ont donc aussi de meilleures chances de gagner le match suivant.
+Pour chaque équipe, on compte les points de ses matchs précédents : **3 points par victoire, 1 point par match nul, 0 point par défaite**.
 
-Si on regarde seulement « bonne forme → bons résultats », on ne sait pas si c'est :
+- **Méthode brute** : on additionne les points des matchs 1 à 5 (colonnes `_1` à `_5`). L'équipe avec le plus de points est prédite gagnante. En cas d'égalité, on prédit « domicile » (il gagne un peu plus souvent).
+- **Ajustement « forme habituelle »** : on refait la même prédiction avec les matchs 6 à 10, pour comparer.
+- On garde les matchs où les deux équipes ont au moins 3 matchs joués dans chaque fenêtre : **95 313 matchs analysés**.
 
-- la **forme** qui aide ;
-- ou simplement la **qualité de l'équipe**, qui produit à la fois la bonne forme et les bons résultats.
+### 4.2 Résultat des deux règles simples
 
-Il faut donc séparer les deux.
-
-### 4.2 Étape 1 — Transformer un match en deux observations
-
-Un match Real Madrid–Barcelone ne donne pas une seule ligne, mais **deux** :
-
-- une ligne pour le Real Madrid (équipe à domicile) ;
-- une ligne pour Barcelone (équipe à l'extérieur).
-
-Chaque ligne contient l'historique de l'équipe concernée et les points qu'elle a gagnés dans ce match.
-
-La variable à expliquer est le **nombre de points au match suivant** :
-
-- **3** points pour une victoire ;
-- **1** point pour un match nul ;
-- **0** point pour une défaite.
-
-Au total, après nettoyage, on obtient **190 624 observations équipe-match**, correspondant à **95 312 matchs** et **8 188 équipes**. Le nombre d'observations est plus grand que le nombre de matchs, car chaque match est vu deux fois.
-
-### 4.3 Étape 2 — Mesurer la forme récente
-
-Pour chaque équipe, on regarde les **5 derniers matchs** (colonnes `_1` à `_5`) et on résume :
-
-- les **points par match** (0 à 3) ;
-- la **différence de buts** ;
-- la **note moyenne**.
-
-L'idée est simple : une équipe qui vient de gagner beaucoup a une forme récente élevée.
-
-### 4.4 Étape 3 — Mesurer le niveau habituel sans mélanger avec la forme
-
-Pour mesurer le niveau habituel, on utilise les **5 matchs précédents** (colonnes `_6` à `_10`), et non les 5 matchs de la forme récente.
-
-Pourquoi ? Parce que si on utilisait les mêmes matchs pour mesurer le niveau et la forme, on comparerait la forme avec elle-même. En séparant les deux fenêtres :
-
-- **forme récente** = ce qui s'est passé dans les 5 derniers matchs ;
-- **niveau habituel** = ce que l'équipe faisait dans les 5 matchs d'avant.
-
-Les deux fenêtres ne se chevauchent pas.
-
-### 4.5 Étape 4 — Mesurer la force des adversaires
-
-Deux contrôles supplémentaires sont ajoutés :
-
-- la **note moyenne des adversaires rencontrés** pendant les 5 derniers matchs : une bonne forme contre des adversaires faibles vaut moins qu'une bonne forme contre des adversaires forts ;
-- le **niveau habituel du prochain adversaire** : jouer contre une équipe forte ou faible change évidemment le résultat attendu.
-
-Sans ces contrôles, on pourrait attribuer à la forme un effet qui vient en réalité du calendrier.
-
-### 4.6 Étape 5 — Nettoyer les données
-
-On exige :
-
-- au moins **3 matchs valides** dans la fenêtre récente ;
-- au moins **3 matchs valides** dans la fenêtre du niveau habituel ;
-- les données des deux équipes et du prochain adversaire.
-
-Les observations incomplètes sont écartées. Cela évite que le résultat dépende de quelques cas particuliers.
-
-### 4.7 Étape 6 — Première photo, sans aucun contrôle
-
-On classe les observations selon la forme récente, en **5 groupes (quintiles)**, du plus faible au plus fort :
-
-- Q1 = la moins bonne forme ;
-- Q5 = la meilleure forme.
-
-Puis on regarde les points moyens au match suivant :
-
-| Groupe de forme | Points au match suivant |
+| Méthode (toute la table) | Bonnes prédictions |
 |---|---|
-| Q1 (forme la plus faible) | **1,15** |
-| Q5 (forme la plus forte) | **1,69** |
+| Règle brute (matchs 1 à 5) | **45,0 %** |
+| Règle forme habituelle (matchs 6 à 10) | **44,1 %** |
+| Référence : toujours prédire « domicile » | **43,1 %** |
 
-Soit un écart de **+0,54 point**. La corrélation brute est de **0,14**.
+Les deux règles font à peine mieux que parier « domicile » à chaque match, sans rien regarder.
 
-À ce stade, tout semble indiquer que la forme récente compte.
+### 4.3 Un modèle entraîné sur 70 % des matchs
 
-### 4.8 Étape 7 — Ajouter les contrôles
+On entraîne une régression logistique sur 70 % des matchs et on la teste sur les 30 % restants. Ses seules informations : les points des matchs 1 à 5 et 6 à 10 des deux équipes.
 
-On compare trois modèles :
-
-| Modèle | Ce qu'il contrôle | Coefficient de la forme |
-|---|---|---|
-| **M1** | la forme seule | **0,186** |
-| **M2** | + niveau habituel + niveau du prochain adversaire + match à domicile | **0,133** |
-| **M3** | + force des adversaires récents + forme récente de l'adversaire | **0,103** |
-
-Les coefficients sont **standardisés** : les variables n'ont pas la même unité (points, notes), donc on les ramène à une unité commune, l'écart-type. Un coefficient plus grand signifie que la variable pèse davantage. Un coefficient de 0,10 signifie : quand la variable augmente d'un écart-type, le résultat augmente de 0,10 point, toutes choses égales par ailleurs.
-
-Le coefficient de la forme passe de **0,186** à **0,103** : l'effet diminue presque de moitié dès que l'on contrôle le niveau et les adversaires.
-
-Dans le modèle complet M3, les autres variables pèsent davantage :
-
-| Variable | Coefficient standardisé |
+| Méthode (sur le test de 30 %) | Bonnes prédictions |
 |---|---|
-| Niveau habituel de l'équipe | **0,213** |
-| Niveau du prochain adversaire | **−0,166** |
-| Forme récente de l'adversaire | **−0,156** |
-| Force des adversaires récents | **−0,087** |
-| Jouer à domicile | **0,352** |
-| **Forme récente de l'équipe** | **0,103** |
+| Modèle entraîné (70 %) | **47,2 %** |
+| Règle brute (matchs 1 à 5) | **44,9 %** |
+| Règle forme habituelle (matchs 6 à 10) | **44,3 %** |
+| Référence : toujours prédire « domicile » | **43,4 %** |
 
-Les signes négatifs sont logiques : plus le prochain adversaire est fort, plus il est en forme, ou plus les adversaires récents étaient forts, moins l'équipe gagne de points en moyenne.
+### 4.4 Réponse de la partie 4
 
-En points : passer de **0 à 3 points de forme récente** est associé à **+0,46 point** au match suivant, en gardant le niveau et les adversaires constants. C'est réel, mais modeste.
+**Non, on ne peut pas prédire de façon fiable qui va gagner le prochain match avec les seuls points des 5 derniers matchs.**
 
-### 4.9 Étape 8 — La preuve décisive : comparer chaque équipe à elle-même
-
-Le modèle M3 reste imparfait : le niveau habituel est mesuré avec seulement 5 matchs, donc avec du bruit. Il peut rester de la qualité d'équipe non contrôlée.
-
-Pour aller plus loin, on compare **chaque équipe à sa propre moyenne**. Autrement dit, on ne compare plus le Real Madrid à une équipe faible, mais le Real Madrid d'une bonne série au Real Madrid d'une mauvaise série.
-
-Techniquement, on retire à chaque variable la moyenne de l'équipe. Cela élimine tout ce qui est fixe pour l'équipe : budget, effectif, ligue, niveau structurel.
-
-Résultats :
-
-- le coefficient de la forme devient **−0,052** ;
-- l'écart entre le quintile de forme le plus bas et le plus haut est de **−0,13 point** (le gradient disparaît, avec même une très légère baisse) ;
-- la corrélation **entre équipes** est de **0,69**, mais la corrélation **à l'intérieur des équipes** est de **−0,04**.
-
-Autrement dit : la relation observée au départ est presque entièrement une relation **entre équipes**, pas une relation **au sein d'une même équipe**.
-
-Si on mesure la performance par la **note** plutôt que par les points, l'effet interne devient très légèrement positif (**+0,056**), mais il reste négligeable.
-
-### 4.10 Pourquoi l'effet disparaît-il ?
-
-Prenons une analogie simple : les élèves qui ont eu de bonnes notes aux derniers contrôles ont souvent de bonnes notes au suivant. Mais c'est surtout parce qu'ils sont bons élèves. Si on compare **le même élève** à lui-même, une bonne série ne garantit pas la note suivante : il peut très bien revenir vers sa moyenne.
-
-C'est exactement ce que l'on observe :
-
-- les bonnes équipes ont de bonnes séries **et** de bons résultats ;
-- mais quand une même équipe a une série meilleure que d'habitude, elle ne gagne pas significativement plus de points au match suivant ;
-- on observe même un léger **retour à la moyenne** après une série exceptionnelle.
-
-### 4.11 Réponse de la partie 4
-
-**La forme récente, par elle seule, influence très peu le résultat suivant, et probablement pas de façon causale.**
-
-- Sans contrôle, l'écart entre la pire et la meilleure forme est de **+0,54 point**.
-- En contrôlant le niveau et les adversaires, l'effet se réduit à **+0,46 point** entre 0 et 3 points de forme (coefficient standardisé de 0,103).
-- En comparant chaque équipe à elle-même, l'effet positif disparaît, voire s'inverse très légèrement (coefficient de **−0,052**, écart de **−0,13 point** entre Q1 et Q5).
-
-La forme récente peut servir de **signal faible**, mais elle ne suffit pas à prédire le résultat. L'essentiel de l'association brute vient de la **qualité habituelle des équipes**, pas de la forme récente elle-même.
+- La règle brute ne prédit bien qu'environ **1 match sur 2** (45,0 %), à peine mieux que « toujours domicile » (43,1 %).
+- La forme habituelle (matchs 6 à 10) donne le même résultat (44,1 %) : quelle que soit la fenêtre choisie, le signal reste faible.
+- Le modèle entraîné sur 70 % des matchs atteint **47,2 %** sur le test : une petite amélioration, mais largement insuffisante pour être utile.
+- Les matchs nuls (environ **25 %** des matchs) sont quasiment impossibles à prévoir : les règles ne prédisent jamais « nul », et le modèle se trompe presque toujours sur eux.
+- Conclusion : les points des 5 derniers matchs ne suffisent pas à prédire un gagnant. Le résultat du prochain match reste trop incertain.
 
 ---
 
@@ -374,7 +260,7 @@ La forme récente peut servir de **signal faible**, mais elle ne suffit pas à p
 | 1 | Qu'ai-je ? | 110 938 matchs, 191 variables, 727 ligues, 10 214 équipes. |
 | 2 | Puis-je faire confiance aux données ? | Oui, mais 186 colonnes ont des valeurs manquantes (8,10 % des cellules), surtout dans les historiques. |
 | 3 | Que racontent les variables ? | Avantage du domicile (43,37 %), forte hétérogénéité entre ligues, corrélations réelles mais modérées. |
-| 4 | La forme récente influence-t-elle le résultat ? | Très peu : l'effet brut diminue avec les contrôles et disparaît quand on compare chaque équipe à elle-même. |
+| 4 | Peut-on prédire le gagnant avec les 5 derniers matchs ? | Non : ≈ 45 % de bonnes prédictions avec la règle brute, ≈ 47 % avec un modèle entraîné sur 70 % des matchs — à peine mieux que « toujours domicile » (≈ 43 %). |
 
 **Conclusion générale :** les données sont riches et cohérentes, mais le football reste très aléatoire. Les variables de forme récente ont un pouvoir explicatif limité. Pour progresser, il faudra construire un modèle de prédiction avec une séparation chronologique, de bonnes variables de force d'équipe et une évaluation honnête.
 
@@ -383,7 +269,7 @@ La forme récente peut servir de **signal faible**, mais elle ne suffit pas à p
 ## 6. Limites de l'analyse
 
 - **Analyse observationnelle** : on observe des associations, pas une causalité démontrée.
-- **Pas de test hors échantillon dans la partie 4** : les régressions servent à expliquer les données observées, pas à mesurer une performance de prédiction sur des matchs futurs.
+- **Séparation aléatoire dans la partie 4** : le test 70/30 est un tirage aléatoire, alors que la partie 3 recommande une **séparation chronologique** (entraîner sur le passé, tester sur le futur). Le score réel sur des matchs futurs serait probablement un peu différent.
 - **Fenêtre courte** : la forme récente est mesurée sur 5 matchs, ce qui est peu et bruité.
 - **Notes de match** : la note est un indicateur de performance par match, pas un classement Elo officiel. La force des adversaires est donc approximée.
 - **Historiques incomplets** : les équipes avec moins de 3 matchs valides sont exclues, ce qui peut écarter les nouvelles équipes ou les ligues peu couvertes.
