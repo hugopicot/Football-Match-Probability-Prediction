@@ -7,6 +7,7 @@ from model import (
     HISTORY_FEATURES,
     HISTORY_LENGTH,
     OUTCOMES,
+    count_matches_with_sufficient_history,
     make_match_features,
     predict_probabilities,
     train_model,
@@ -28,57 +29,67 @@ def load_model():
     return train_model(TRAINING_DATA)
 
 
-def render_team_history(team_label: str, team_key: str) -> list[tuple[int, int, bool]]:
-    count = st.select_slider(
-        f"Matchs récents renseignés — {team_label}",
-        options=list(range(1, HISTORY_LENGTH + 1)),
-        value=3,
-        key=f"{team_key}_history_count",
+def render_team_history(team_label: str, team_key: str) -> list[tuple[int, int] | None]:
+    st.caption(
+        f"Renseignez les 10 derniers matchs de {team_label}. "
+        "Cochez uniquement les matchs dont vous connaissez le score."
     )
-    history: list[tuple[int, int, bool]] = []
-    for match_number in range(1, count + 1):
-        st.markdown(f"**Match récent {match_number}**")
-        score_columns = st.columns(3)
-        goals = score_columns[0].number_input(
-            f"Buts de {team_label}",
-            min_value=0,
-            max_value=20,
-            value=1,
-            key=f"{team_key}_goals_{match_number}",
-        )
-        opponent_goals = score_columns[1].number_input(
-            "Buts encaissés",
-            min_value=0,
-            max_value=20,
-            value=1,
-            key=f"{team_key}_opponent_goals_{match_number}",
-        )
-        played_at_home = score_columns[2].checkbox(
-            "Jouait à domicile",
-            value=True,
-            key=f"{team_key}_played_at_home_{match_number}",
-        )
-        history.append((goals, opponent_goals, played_at_home))
-
-    return history
+    history = pd.DataFrame(
+        {
+            "Match": [f"Match {number}" for number in range(1, HISTORY_LENGTH + 1)],
+            "Match renseigné": [False] * HISTORY_LENGTH,
+            "Buts marqués": [0] * HISTORY_LENGTH,
+            "Buts encaissés": [0] * HISTORY_LENGTH,
+        },
+    )
+    edited_history = st.data_editor(
+        history,
+        key=f"{team_key}_history",
+        hide_index=True,
+        num_rows="fixed",
+        disabled=["Match"],
+        use_container_width=True,
+        column_config={
+            "Match renseigné": st.column_config.CheckboxColumn(
+                "Score connu", default=False
+            ),
+            "Buts marqués": st.column_config.NumberColumn(
+                min_value=0, max_value=20, step=1
+            ),
+            "Buts encaissés": st.column_config.NumberColumn(
+                min_value=0, max_value=20, step=1
+            ),
+        },
+    )
+    return [
+        (int(row["Buts marqués"]), int(row["Buts encaissés"]))
+        if row["Match renseigné"]
+        else None
+        for _, row in edited_history.iterrows()
+    ]
 
 
 def prediction_page() -> None:
     st.title("⚽ Prédire un match")
     st.write(
         "Estimez les probabilités de victoire à domicile, de match nul et de "
-        "victoire à l'extérieur à partir des cinq derniers matchs de chaque équipe."
+        "victoire à l'extérieur à partir des points des matchs précédents des équipes."
     )
     st.info(
-        "Le modèle s'entraîne automatiquement sur `data/train.csv` au premier "
-        "chargement. Les noms des équipes servent à présenter le résultat ; "
-        "la prédiction utilise les scores récents et le lieu des matchs passés. "
-        "Elle tient aussi compte de la forme du club recevant à domicile et de "
-        "celle du visiteur à l'extérieur."
+        "La méthode reprend la partie 4 du notebook : une régression logistique "
+        "utilise les points cumulés sur les matchs 1–5 et 6–10 (3 points par "
+        "victoire, 1 par nul, 0 par défaite). Au moins 3 scores connus sont "
+        "nécessaires dans chacune de ces fenêtres, pour chaque équipe. "
+        "Le notebook mesure 47,2 % de bonnes prédictions sur un test aléatoire "
+        "de 30 % ; ce résultat indicatif ne garantit pas la précision d'un match."
     )
 
     with st.spinner("Entraînement du modèle sur les matchs disponibles…"):
         classifier = load_model()
+    st.caption(
+        "Le modèle est entraîné sur les matchs de `data/train.csv` qui disposent "
+        "d'un historique suffisant."
+    )
 
     with st.form("match_prediction"):
         team_columns = st.columns(2)
@@ -91,35 +102,49 @@ def prediction_page() -> None:
         with history_columns[1]:
             st.subheader(f"Forme récente — {away_team or 'Équipe visiteuse'}")
             away_history = render_team_history(away_team or "Équipe visiteuse", "away")
+        st.caption(
+            "Les lignes 1–5 sont les cinq matchs les plus récents ; les lignes "
+            "6–10 servent de référence pour la forme habituelle."
+        )
         submitted = st.form_submit_button(
             "Calculer les probabilités", type="primary", use_container_width=True
         )
 
     if submitted:
-        match_features = make_match_features(home_history, away_history)
-        probabilities = predict_probabilities(classifier, match_features).iloc[0]
-        most_likely = probabilities.idxmax()
+        try:
+            match_features = make_match_features(home_history, away_history)
+            probabilities = predict_probabilities(classifier, match_features).iloc[0]
+        except ValueError as error:
+            st.error(str(error))
+        else:
+            most_likely = probabilities.idxmax()
 
-        st.subheader(f"{home_team or 'Équipe à domicile'} — {away_team or 'Équipe visiteuse'}")
-        result_columns = st.columns(3)
-        outcome_labels = {
-            "home": f"Victoire {home_team or 'domicile'}",
-            "draw": "Match nul",
-            "away": f"Victoire {away_team or 'visiteur'}",
-        }
-        for column, outcome in zip(result_columns, OUTCOMES):
-            column.metric(outcome_labels[outcome], f"{probabilities[outcome]:.1%}")
-            column.progress(float(probabilities[outcome]))
-        st.success(
-            f"Scénario le plus probable : **{outcome_labels[most_likely]}** "
-            f"({probabilities[most_likely]:.1%})."
-        )
+            st.subheader(
+                f"{home_team or 'Équipe à domicile'} — "
+                f"{away_team or 'Équipe visiteuse'}"
+            )
+            result_columns = st.columns(3)
+            outcome_labels = {
+                "home": f"Victoire {home_team or 'domicile'}",
+                "draw": "Match nul",
+                "away": f"Victoire {away_team or 'visiteur'}",
+            }
+            for column, outcome in zip(result_columns, OUTCOMES):
+                column.metric(outcome_labels[outcome], f"{probabilities[outcome]:.1%}")
+                column.progress(float(probabilities[outcome]))
+            st.success(
+                f"Scénario le plus probable : **{outcome_labels[most_likely]}** "
+                f"({probabilities[most_likely]:.1%})."
+            )
 
     st.divider()
     st.subheader("Prédire un fichier de matchs")
     st.write(
         "Importez un CSV au format des données du projet, avec les colonnes "
-        "d'historique récentes requises. Le fichier de résultats peut être téléchargé."
+        "des scores des 10 matchs précédents. Chaque équipe doit avoir au moins "
+        "3 scores connus dans les matchs 1–5 et 3 dans les matchs 6–10 pour "
+        "utiliser le modèle. Les lignes avec un historique plus incomplet "
+        "recevront la répartition moyenne des résultats du jeu d'entraînement."
     )
     uploaded_file = st.file_uploader("Fichier CSV", type=["csv"])
     if uploaded_file is not None:
@@ -128,10 +153,20 @@ def prediction_page() -> None:
                 uploaded_file,
                 usecols=lambda column: column == "id" or column in HISTORY_FEATURES,
             )
-            probabilities = predict_probabilities(classifier, matches)
+            eligible_count = count_matches_with_sufficient_history(matches)
+            probabilities = predict_probabilities(
+                classifier, matches, allow_incomplete_history=True
+            )
         except (pd.errors.ParserError, UnicodeDecodeError, ValueError) as error:
             st.error(f"Impossible de traiter ce fichier : {error}")
         else:
+            fallback_count = len(matches) - eligible_count
+            if fallback_count:
+                st.warning(
+                    f"{fallback_count:,} ligne(s) n'ont pas assez d'historique. "
+                    "Pour celles-ci, les probabilités affichées sont la fréquence "
+                    "des résultats sur les matchs d'entraînement admissibles."
+                )
             output = pd.DataFrame(index=matches.index)
             if "id" in matches.columns:
                 output["id"] = matches["id"]

@@ -295,16 +295,22 @@ Projet de prédiction du résultat de matchs de football (`home`, `draw`, `away`
 ## Application interactive
 
 L'application Streamlit entraîne un classifieur à partir de `data/train.csv` lors
-de son premier chargement. Elle permet de saisir les scores et le lieu des cinq
-derniers matchs de chaque équipe, d'afficher les probabilités des trois résultats,
-et de générer des prédictions pour un fichier CSV contenant les colonnes
-d'historique du projet. Le CSV téléchargé contient `id,home,draw,away`, comme
-`data/sample_submission.csv`. Les noms des équipes sont uniquement utilisés pour
-l'affichage ; les variables d'entrée du modèle sont les scores et le lieu des
-matchs récents. Le modèle prend également en compte les moyennes de buts, de
-buts encaissés et de points obtenus par l'équipe à domicile dans ses matchs
-passés à domicile, ainsi que par l'équipe visiteuse dans ses matchs passés à
-l'extérieur.
+de son premier chargement. Comme dans la partie 4 de
+`Notebook/eda_jointure.ipynb`, le modèle est une régression logistique utilisant
+quatre variables : les points cumulés par les deux équipes sur les matchs 1–5 et
+6–10 (3 points par victoire, 1 par nul, 0 par défaite). Il est entraîné sur les
+lignes qui ont au moins 3 scores valides dans chacune de ces fenêtres pour les
+deux équipes.
+
+L'application permet de saisir ces dix scores pour chaque équipe, d'afficher les
+probabilités des trois résultats et de générer des prédictions en lot pour un
+CSV contenant les colonnes d'historique du projet. Le CSV téléchargé contient
+`id,home,draw,away`, comme `data/sample_submission.csv`. Le notebook obtient
+47,2 % de bonnes prédictions sur un test aléatoire de 30 % ; ce score est
+indicatif et ne garantit pas les résultats futurs. Pour une ligne CSV dont
+l'historique est trop incomplet, l'application utilise explicitement les
+fréquences des trois résultats dans les données d'entraînement plutôt qu'une
+prédiction du modèle.
 
 Depuis la racine du dépôt, installez les dépendances et lancez l'application :
 
