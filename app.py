@@ -8,8 +8,10 @@ from model import (
     HISTORY_LENGTH,
     OUTCOMES,
     count_matches_with_sufficient_history,
+    generate_random_history,
     make_match_features,
     predict_probabilities,
+    summarize_history,
     train_model,
 )
 
@@ -29,22 +31,77 @@ def load_model():
     return train_model(TRAINING_DATA)
 
 
+def make_history_table(
+    scores: list[tuple[int, int]] | None = None,
+) -> pd.DataFrame:
+    scores_are_known = scores is not None
+    resolved_scores = scores or [(0, 0)] * HISTORY_LENGTH
+    return pd.DataFrame(
+        {
+            "Match": [f"Match {number}" for number in range(1, HISTORY_LENGTH + 1)],
+            "Match renseigné": [scores_are_known] * HISTORY_LENGTH,
+            "Buts marqués": [score[0] for score in resolved_scores],
+            "Buts encaissés": [score[1] for score in resolved_scores],
+        },
+    )
+
+
+def randomize_histories() -> None:
+    for team_key in ("team_a", "team_b"):
+        st.session_state[f"{team_key}_history_data"] = make_history_table(
+            generate_random_history()
+        )
+    st.session_state["history_editor_version"] = (
+        st.session_state.get("history_editor_version", 0) + 1
+    )
+
+
+def render_team_statistics(history: list[tuple[int, int] | None]) -> None:
+    summary = summarize_history(history)
+    st.markdown("##### Données calculées")
+    if not summary.matches:
+        st.caption("Aucun score renseigné pour le moment.")
+        return
+
+    metric_columns = st.columns(2)
+    metric_columns[0].metric(
+        "Bilan",
+        f"{summary.wins} V · {summary.draws} N · {summary.losses} D",
+    )
+    metric_columns[1].metric(
+        "Buts",
+        f"{summary.goals_for} marqués",
+        delta=f"{summary.goals_against} encaissés",
+        delta_color="off",
+    )
+    metric_columns[0].metric(
+        "Points",
+        f"{summary.points} / {summary.matches * 3}",
+        delta=f"{summary.goal_difference:+d} de différence de buts",
+    )
+    points_per_match = summary.recent_points_per_match
+    metric_columns[1].metric(
+        "Forme récente",
+        summary.form_level,
+        delta=(
+            f"{points_per_match:.1f} pt/match" if points_per_match is not None else None
+        ),
+        delta_color="off",
+    )
+
+
 def render_team_history(team_label: str, team_key: str) -> list[tuple[int, int] | None]:
     st.caption(
         f"Renseignez les 10 derniers matchs de {team_label}. "
         "Cochez uniquement les matchs dont vous connaissez le score."
     )
-    history = pd.DataFrame(
-        {
-            "Match": [f"Match {number}" for number in range(1, HISTORY_LENGTH + 1)],
-            "Match renseigné": [False] * HISTORY_LENGTH,
-            "Buts marqués": [0] * HISTORY_LENGTH,
-            "Buts encaissés": [0] * HISTORY_LENGTH,
-        },
-    )
+    history_data_key = f"{team_key}_history_data"
+    if history_data_key not in st.session_state:
+        st.session_state[history_data_key] = make_history_table()
+    editor_version = st.session_state.get("history_editor_version", 0)
     edited_history = st.data_editor(
-        history,
-        key=f"{team_key}_history",
+        st.session_state[history_data_key],
+        key=f"{team_key}_history_{editor_version}",
         hide_index=True,
         num_rows="fixed",
         disabled=["Match"],
@@ -91,24 +148,53 @@ def prediction_page() -> None:
         "d'un historique suffisant."
     )
 
-    with st.form("match_prediction"):
+    st.button(
+        "🎲 Générer des scores aléatoires",
+        on_click=randomize_histories,
+        help="Remplit les 10 matchs des deux équipes avec des scores entre 0 et 5.",
+        use_container_width=True,
+    )
+
+    with st.container(border=True):
         team_columns = st.columns(2)
-        home_team = team_columns[0].text_input("Équipe à domicile", value="Équipe A")
-        away_team = team_columns[1].text_input("Équipe visiteuse", value="Équipe B")
+        team_a = team_columns[0].text_input("Équipe A", value="Équipe A")
+        team_b = team_columns[1].text_input("Équipe B", value="Équipe B")
+        team_a_label = team_a or "Équipe A"
+        team_b_label = team_b or "Équipe B"
+        home_team_key = st.selectbox(
+            "Qui joue à domicile ?",
+            options=("team_a", "team_b"),
+            format_func=lambda team_key: (
+                team_a_label if team_key == "team_a" else team_b_label
+            ),
+            help="L'autre équipe sera automatiquement considérée comme visiteuse.",
+        )
+        team_a_role = "domicile" if home_team_key == "team_a" else "extérieur"
+        team_b_role = "domicile" if home_team_key == "team_b" else "extérieur"
         history_columns = st.columns(2)
         with history_columns[0]:
-            st.subheader(f"Forme récente — {home_team or 'Équipe à domicile'}")
-            home_history = render_team_history(home_team or "Équipe à domicile", "home")
+            st.subheader(f"Forme récente — {team_a_label} ({team_a_role})")
+            team_a_history = render_team_history(team_a_label, "team_a")
+            render_team_statistics(team_a_history)
         with history_columns[1]:
-            st.subheader(f"Forme récente — {away_team or 'Équipe visiteuse'}")
-            away_history = render_team_history(away_team or "Équipe visiteuse", "away")
+            st.subheader(f"Forme récente — {team_b_label} ({team_b_role})")
+            team_b_history = render_team_history(team_b_label, "team_b")
+            render_team_statistics(team_b_history)
         st.caption(
             "Les lignes 1–5 sont les cinq matchs les plus récents ; les lignes "
-            "6–10 servent de référence pour la forme habituelle."
+            "6–10 servent de référence pour la forme habituelle. Le niveau de "
+            "forme correspond aux points par match sur les lignes 1–5."
         )
-        submitted = st.form_submit_button(
+        submitted = st.button(
             "Calculer les probabilités", type="primary", use_container_width=True
         )
+
+    if home_team_key == "team_a":
+        home_team, away_team = team_a_label, team_b_label
+        home_history, away_history = team_a_history, team_b_history
+    else:
+        home_team, away_team = team_b_label, team_a_label
+        home_history, away_history = team_b_history, team_a_history
 
     if submitted:
         try:
@@ -119,15 +205,12 @@ def prediction_page() -> None:
         else:
             most_likely = probabilities.idxmax()
 
-            st.subheader(
-                f"{home_team or 'Équipe à domicile'} — "
-                f"{away_team or 'Équipe visiteuse'}"
-            )
+            st.subheader(f"{home_team} (domicile) — {away_team} (extérieur)")
             result_columns = st.columns(3)
             outcome_labels = {
-                "home": f"Victoire {home_team or 'domicile'}",
+                "home": f"Victoire {home_team}",
                 "draw": "Match nul",
-                "away": f"Victoire {away_team or 'visiteur'}",
+                "away": f"Victoire {away_team}",
             }
             for column, outcome in zip(result_columns, OUTCOMES):
                 column.metric(outcome_labels[outcome], f"{probabilities[outcome]:.1%}")
