@@ -1,3 +1,4 @@
+import random
 import tempfile
 import unittest
 from pathlib import Path
@@ -135,6 +136,12 @@ class ModelTests(unittest.TestCase):
             self.assertTrue(0 <= goals <= 4)
             self.assertTrue(0 <= conceded <= 4)
 
+        deterministic = generate_random_history(random.Random(42))
+        self.assertEqual(len(deterministic), HISTORY_LENGTH)
+        self.assertTrue(
+            all(0 <= goal <= 5 for score in deterministic for goal in score)
+        )
+
     def test_summarize_history_counts_results_and_recent_form(self) -> None:
         history = [(2, 0), (1, 1), (0, 3), None, (4, 2)] + [None] * 5
 
@@ -146,12 +153,16 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(summary.points, 7)
         self.assertEqual(summary.goal_difference, 1)
         self.assertAlmostEqual(summary.recent_points_per_match, 7 / 4)
-        self.assertEqual(summary.form_level, "Correcte")
+        self.assertEqual(summary.form_level, "Moyenne")
 
         empty = summarize_history([None] * 10)
         self.assertEqual(empty.matches, 0)
         self.assertIsNone(empty.recent_points_per_match)
-        self.assertEqual(empty.form_level, "Aucune donnée")
+        self.assertEqual(empty.form_level, "Non disponible")
+
+        complete = summarize_history(self.home_history)
+        self.assertEqual((complete.wins, complete.draws, complete.losses), (4, 3, 3))
+        self.assertEqual((complete.goals_for, complete.goals_against), (8, 7))
 
     def test_train_model_before_date_ignores_later_matches(self) -> None:
         early_home = make_history_row(self.home_history, self.away_history)
@@ -166,11 +177,28 @@ class ModelTests(unittest.TestCase):
             pd.DataFrame([early_home, early_draw, late_away]).to_csv(
                 training_path, index=False
             )
-            with self.assertRaisesRegex(ValueError, "au moins 3 historiques valides"):
+            with self.assertRaisesRegex(ValueError, "Aucun match d'entraînement"):
                 train_model(training_path, before_date="2019-06-01")
             model = train_model(training_path, before_date="2020-06-01")
 
         self.assertEqual(sorted(model.classifier.classes_.tolist()), ["draw", "home"])
+
+    def test_training_can_exclude_matches_on_or_after_cutoff(self) -> None:
+        rows = []
+        for outcome in OUTCOMES:
+            row = make_history_row(self.home_history, self.away_history)
+            row.update(target=outcome, match_date="2020-01-01")
+            rows.append(row)
+        future_row = make_history_row(self.home_history, self.away_history)
+        future_row.update(target="future-result", match_date="2021-01-01")
+        rows.append(future_row)
+
+        with tempfile.TemporaryDirectory() as directory:
+            training_path = Path(directory) / "train.csv"
+            pd.DataFrame(rows).to_csv(training_path, index=False)
+            model = train_model(training_path, before_date="2020-06-01")
+
+        self.assertEqual(set(model.classifier.classes_), set(OUTCOMES))
 
 
 if __name__ == "__main__":

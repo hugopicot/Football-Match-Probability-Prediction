@@ -312,6 +312,15 @@ l'historique est trop incomplet, l'application utilise explicitement les
 fréquences des trois résultats dans les données d'entraînement plutôt qu'une
 prédiction du modèle.
 
+Le mode **Rejouer un match historique** permet également de sélectionner une
+compétition, une équipe puis un match réel du dataset. Les dix rencontres
+précédentes sont remplies automatiquement. La prédiction est affichée avant le
+score réel, que l'utilisateur peut ensuite révéler, avec un compteur de réussite
+pour la session. Ce mode utilise une séparation chronologique 70/30 : le modèle
+est entraîné uniquement sur les matchs antérieurs au 31 décembre 2020 à 13 h,
+puis évalué sur les matchs postérieurs admissibles. Le résultat du match rejoué
+n'est donc pas utilisé pour entraîner ce modèle.
+
 Depuis la racine du dépôt, installez les dépendances et lancez l'application :
 
 ```bash

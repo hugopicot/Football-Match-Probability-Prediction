@@ -1,8 +1,9 @@
 """Training and prediction helpers for the notebook's form-based model."""
 
+import random
 from dataclasses import dataclass
 from pathlib import Path
-import random
+from typing import Mapping
 
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
@@ -25,6 +26,102 @@ HISTORY_WINDOWS = ((1, 5, "5"), (6, 10, "610"))
 class FormModel:
     classifier: LogisticRegression
     outcome_prior: dict[str, float]
+
+
+@dataclass(frozen=True)
+class TeamHistorySummary:
+    matches: int
+    wins: int
+    draws: int
+    losses: int
+    goals_for: int
+    goals_against: int
+    points: int
+    goal_difference: int
+    recent_points_per_match: float | None
+    form_level: str
+
+
+def generate_random_history(
+    rng: random.Random | None = None,
+    max_goals: int = 5,
+) -> list[tuple[int, int]]:
+    """Generate ten plausible score lines for the manual demo mode."""
+    generator = rng or random
+    return [
+        (generator.randint(0, max_goals), generator.randint(0, max_goals))
+        for _ in range(HISTORY_LENGTH)
+    ]
+
+
+def summarize_history(
+    history: list[tuple[int, int] | None],
+) -> TeamHistorySummary:
+    """Summarize results and recent form without moving missing matches."""
+    known_matches = [score for score in history if score is not None]
+    wins = sum(goals > conceded for goals, conceded in known_matches)
+    draws = sum(goals == conceded for goals, conceded in known_matches)
+    losses = sum(goals < conceded for goals, conceded in known_matches)
+    goals_for = sum(goals for goals, _ in known_matches)
+    goals_against = sum(conceded for _, conceded in known_matches)
+    points = wins * 3 + draws
+
+    recent_matches = [score for score in history[:5] if score is not None]
+    recent_points = sum(
+        3 if goals > conceded else 1 if goals == conceded else 0
+        for goals, conceded in recent_matches
+    )
+    recent_points_per_match = (
+        recent_points / len(recent_matches) if recent_matches else None
+    )
+    if recent_points_per_match is None:
+        form_level = "Non disponible"
+    elif recent_points_per_match >= 2:
+        form_level = "Bonne"
+    elif recent_points_per_match >= 1:
+        form_level = "Moyenne"
+    else:
+        form_level = "Faible"
+
+    return TeamHistorySummary(
+        matches=len(known_matches),
+        wins=wins,
+        draws=draws,
+        losses=losses,
+        goals_for=goals_for,
+        goals_against=goals_against,
+        points=points,
+        goal_difference=goals_for - goals_against,
+        recent_points_per_match=recent_points_per_match,
+        form_level=form_level,
+    )
+
+
+def history_from_match(
+    match: Mapping[str, object], team: str
+) -> list[tuple[int, int] | None]:
+    """Extract one team's ordered n-1 to n-10 score history from a row."""
+    if team not in {"home", "away"}:
+        raise ValueError("L'équipe historique doit être 'home' ou 'away'.")
+
+    history: list[tuple[int, int] | None] = []
+    for match_number in range(1, HISTORY_LENGTH + 1):
+        goals = match[f"{team}_team_history_goal_{match_number}"]
+        conceded = match[f"{team}_team_history_opponent_goal_{match_number}"]
+        if pd.isna(goals) or pd.isna(conceded):
+            history.append(None)
+            continue
+        try:
+            numeric_goals = float(goals)
+            numeric_conceded = float(conceded)
+        except (TypeError, ValueError) as error:
+            raise ValueError("Un score historique n'est pas numérique.") from error
+        if numeric_goals < 0 or numeric_conceded < 0:
+            raise ValueError("Les scores historiques ne peuvent pas être négatifs.")
+        if not numeric_goals.is_integer() or not numeric_conceded.is_integer():
+            raise ValueError("Les scores historiques doivent être des nombres entiers.")
+        history.append((int(numeric_goals), int(numeric_conceded)))
+    return history
 
 
 def _make_form_features(matches: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
@@ -107,9 +204,9 @@ def prepare_features(matches: pd.DataFrame) -> pd.DataFrame:
 
 def train_model(
     training_data_path: str | Path,
-    before_date: str | None = None,
+    before_date: str | pd.Timestamp | None = None,
 ) -> FormModel:
-    """Fit the notebook's logistic regression on rows with enough history.
+    """Fit the form model, optionally using only matches before a cutoff.
 
     When ``before_date`` is given, only matches strictly before that date are used.
     """
@@ -119,15 +216,20 @@ def train_model(
             f"Fichier d'entraînement introuvable : {training_data_path}"
         )
 
-    columns = [*HISTORY_FEATURES, "target"]
+    selected_columns = [*HISTORY_FEATURES, "target"]
     if before_date is not None:
-        columns.append("match_date")
-    training_data = pd.read_csv(training_data_path, usecols=columns)
+        selected_columns.append("match_date")
+    training_data = pd.read_csv(training_data_path, usecols=selected_columns)
     if before_date is not None:
+        cutoff = pd.Timestamp(before_date)
         match_dates = pd.to_datetime(training_data["match_date"], errors="coerce")
         if match_dates.isna().any():
             raise ValueError("La colonne match_date contient des dates invalides.")
-        training_data = training_data.loc[match_dates.lt(pd.Timestamp(before_date))]
+        training_data = training_data.loc[match_dates.lt(cutoff)]
+        if training_data.empty:
+            raise ValueError(
+                "Aucun match d'entraînement n'est antérieur à la date de coupure."
+            )
     labels = training_data["target"].astype("string").str.strip().str.lower()
     unexpected = sorted(set(labels.dropna()) - set(OUTCOMES))
     if unexpected:
@@ -210,84 +312,8 @@ def count_matches_with_sufficient_history(matches: pd.DataFrame) -> int:
 
 
 def matches_with_sufficient_history(matches: pd.DataFrame) -> pd.Series:
-    """Return a boolean mask of rows meeting the minimum-history rule."""
+    """Return the eligibility mask used by training and prediction."""
     _, usable = _make_form_features(matches)
     return usable
 
 
-def history_from_match(match: pd.Series, team: str) -> list[tuple[int, int] | None]:
-    """Read a team's ten most recent scores from one training row (most recent first)."""
-    history: list[tuple[int, int] | None] = []
-    for match_number in range(1, HISTORY_LENGTH + 1):
-        goals = match[f"{team}_team_history_goal_{match_number}"]
-        conceded = match[f"{team}_team_history_opponent_goal_{match_number}"]
-        if pd.isna(goals) or pd.isna(conceded):
-            history.append(None)
-        else:
-            history.append((int(goals), int(conceded)))
-    return history
-
-
-def generate_random_history(max_goals: int = 4) -> list[tuple[int, int]]:
-    """Draw ten random scores between 0 and ``max_goals`` for each match."""
-    return [
-        (random.randint(0, max_goals), random.randint(0, max_goals))
-        for _ in range(HISTORY_LENGTH)
-    ]
-
-
-RECENT_FORM_MATCHES = 5
-
-
-@dataclass(frozen=True)
-class HistorySummary:
-    matches: int
-    wins: int
-    draws: int
-    losses: int
-    goals_for: int
-    goals_against: int
-    points: int
-    goal_difference: int
-    recent_points_per_match: float | None
-    form_level: str
-
-
-def summarize_history(history: list[tuple[int, int] | None]) -> HistorySummary:
-    """Summarise known scores; the form uses the last five matches (most recent first)."""
-    known = [score for score in history if score is not None]
-    wins = sum(goals > conceded for goals, conceded in known)
-    draws = sum(goals == conceded for goals, conceded in known)
-    losses = len(known) - wins - draws
-    goals_for = sum(goals for goals, _ in known)
-    goals_against = sum(conceded for _, conceded in known)
-
-    recent = [score for score in history[:RECENT_FORM_MATCHES] if score is not None]
-    recent_points_per_match = None
-    if recent:
-        recent_points = sum(
-            3 * (goals > conceded) + (goals == conceded) for goals, conceded in recent
-        )
-        recent_points_per_match = recent_points / len(recent)
-
-    if recent_points_per_match is None:
-        form_level = "Aucune donnée"
-    elif recent_points_per_match >= 2:
-        form_level = "Bonne"
-    elif recent_points_per_match >= 1:
-        form_level = "Correcte"
-    else:
-        form_level = "Faible"
-
-    return HistorySummary(
-        matches=len(known),
-        wins=wins,
-        draws=draws,
-        losses=losses,
-        goals_for=goals_for,
-        goals_against=goals_against,
-        points=3 * wins + draws,
-        goal_difference=goals_for - goals_against,
-        recent_points_per_match=recent_points_per_match,
-        form_level=form_level,
-    )
